@@ -7,6 +7,9 @@ jobs:
   build:
     name: Build Kexts su macOS con Xcode
     runs-on: macos-latest
+    env:
+      # Risolve il warning sui server GitHub forzando la compatibilità delle vecchie azioni
+      ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: true
 
     steps:
     - name: Checkout del codice sorgente
@@ -24,8 +27,7 @@ jobs:
       run: |
         cd Satellites/VoodooI2CHID
         
-        # Sostituzione mirata della patch descritta nel tuo script all'interno di VoodooI2CHIDDevice.hpp
-        # Inserisce la dicitura di didTerminate prima della chiusura della classe
+        # Inserisce la dicitura di didTerminate prima della chiusura della classe in VoodooI2CHIDDevice.hpp
         sed -i '' '/bool open(IOService \*forClient/i \
             bool didTerminate(IOService* provider, IOOptionBits options, bool* defer) override; \
         ' VoodooI2CHIDDevice.hpp
@@ -40,13 +42,13 @@ jobs:
 
         echo ">>> Patch applicata con successo ai sorgenti di VoodooI2CHID!"
 
-    - name: Compilazione dei Kext
+    - name: Pre-configurazione e Compilazione dei Kext
       run: |
-        # Forza la compilazione usando Xcode in modalità Release
-        xcodebuild -workspace VoodooI2C.xcworkspace -scheme VoodooI2C -configuration Release RUN_CLANG_STATIC_ANALYZER=NO ONLY_ACTIVE_ARCH=NO
+        # Genera le dipendenze e compila i target principali e i satelliti associati nel Workspace
+        xcodebuild -workspace VoodooI2C.xcworkspace -scheme "VoodooI2C" -configuration Release -derivedDataPath build/ ARCHS=x86_64 ONLY_ACTIVE_ARCH=NO RUN_CLANG_STATIC_ANALYZER=NO
 
     - name: Archiviazione e Caricamento dei Kext Pronti
       uses: actions/upload-artifact@v4
       with:
         name: VoodooI2C-Modificato-Kexts
-        path: build/Release/*.kext
+        path: build/Build/Products/Release/*.kext
