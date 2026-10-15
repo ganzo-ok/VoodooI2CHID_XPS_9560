@@ -1,14 +1,13 @@
-name: Compila VoodooI2C con Fix
+name: Compila VoodooI2CHID XPS 9560
 
 on:
   workflow_dispatch:
 
 jobs:
   build:
-    name: Build Kexts su macOS con Xcode
+    name: Build Kext su macOS con Xcode
     runs-on: macos-latest
     env:
-      # Risolve il warning sui server GitHub forzando la compatibilità delle vecchie azioni
       ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: true
 
     steps:
@@ -25,7 +24,7 @@ jobs:
 
     - name: Applicazione della correzione (Fix didTerminate)
       run: |
-        cd Satellites/VoodooI2CHID
+        # Applica le modifiche direttamente nella root senza cambiare cartella
         
         # Inserisce la dicitura di didTerminate prima della chiusura della classe in VoodooI2CHIDDevice.hpp
         sed -i '' '/bool open(IOService \*forClient/i \
@@ -42,13 +41,17 @@ jobs:
 
         echo ">>> Patch applicata con successo ai sorgenti di VoodooI2CHID!"
 
-    - name: Pre-configurazione e Compilazione dei Kext
+    - name: Compilazione del Kext
       run: |
-        # Genera le dipendenze e compila i target principali e i satelliti associati nel Workspace
-        xcodebuild -workspace VoodooI2C.xcworkspace -scheme "VoodooI2C" -configuration Release -derivedDataPath build/ ARCHS=x86_64 ONLY_ACTIVE_ARCH=NO RUN_CLANG_STATIC_ANALYZER=NO
+        # Cerca il file .xcodeproj o .xcworkspace presente nel tuo specifico repository e lo compila
+        if [ -d *.xcworkspace ]; then
+          xcodebuild -workspace *.xcworkspace -scheme "VoodooI2CHID" -configuration Release -derivedDataPath build/ ARCHS=x86_64 ONLY_ACTIVE_ARCH=NO RUN_CLANG_STATIC_ANALYZER=NO
+        else
+          xcodebuild -project *.xcodeproj -scheme "VoodooI2CHID" -configuration Release -derivedDataPath build/ ARCHS=x86_64 ONLY_ACTIVE_ARCH=NO RUN_CLANG_STATIC_ANALYZER=NO
+        fi
 
-    - name: Archiviazione e Caricamento dei Kext Pronti
+    - name: Archiviazione e Caricamento del Kext Pronto
       uses: actions/upload-artifact@v4
       with:
-        name: VoodooI2C-Modificato-Kexts
+        name: VoodooI2CHID-XPS9560-Fix
         path: build/Build/Products/Release/*.kext
