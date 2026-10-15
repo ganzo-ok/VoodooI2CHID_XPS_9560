@@ -18,6 +18,7 @@ jobs:
 
     - name: Scarica il Framework Principale VoodooI2C
       run: |
+        # URL corretto per scaricare la repository principale ufficiale
         git clone --depth=1 --recurse-submodules https://github.com voodoo_main
 
     - name: Configura Xcode
