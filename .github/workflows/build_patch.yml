@@ -1,0 +1,52 @@
+name: Compila VoodooI2C con Fix
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build Kexts su macOS con Xcode
+    runs-on: macos-latest
+
+    steps:
+    - name: Checkout del codice sorgente
+      uses: actions/checkout:v4
+      with:
+        submodules: 'recursive'
+        fetch-depth: 1
+
+    - name: Configura Xcode
+      run: |
+        sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
+        xcodebuild -version
+
+    - name: Applicazione della correzione (Fix didTerminate)
+      run: |
+        cd Satellites/VoodooI2CHID
+        
+        # Sostituzione mirata della patch descritta nel tuo script all'interno di VoodooI2CHIDDevice.hpp
+        # Inserisce la dichiarazione di didTerminate prima della chiusura della classe
+        sed -i '' '/bool open(IOService \*forClient/i \
+            bool didTerminate(IOService* provider, IOOptionBits options, bool* defer) override; \
+        ' VoodooI2CHIDDevice.hpp
+
+        # Inserisce l'implementazione della funzione didTerminate in VoodooI2CHIDDevice.cpp
+        cat << 'EOF' >> VoodooI2CHIDDevice.cpp
+
+        bool VoodooI2CHIDDevice::didTerminate(IOService* provider, IOOptionBits options, bool* defer) {
+            return IOService::didTerminate(provider, options, defer);
+        }
+        EOF
+
+        echo ">>> Patch applicata con successo ai sorgenti di VoodooI2CHID!"
+
+    - name: Compilazione dei Kext
+      run: |
+        # Forza la compilazione usando Xcode in modalità Release
+        xcodebuild -workspace VoodooI2C.xcworkspace -scheme VoodooI2C -configuration Release RUN_CLANG_STATIC_ANALYZER=NO ONLY_ACTIVE_ARCH=NO
+
+    - name: Archiviazione e Caricamento dei Kext Pronti
+      uses: actions/artifacts@v4
+      with:
+        name: VoodooI2C-Modificato-Kexts
+        path: build/Release/*.kext
