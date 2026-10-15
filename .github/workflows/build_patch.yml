@@ -24,30 +24,51 @@ jobs:
 
     - name: Applicazione della correzione (Fix didTerminate)
       run: |
-        # Applica le modifiche direttamente nella root senza cambiare cartella
-        
+        echo ">>> Ricerca dei file sorgente nel repository..."
+        HPP_PATH=$(find . -name "VoodooI2CHIDDevice.hpp" -print -quit)
+        CPP_PATH=$(find . -name "VoodooI2CHIDDevice.cpp" -print -quit)
+
+        if [ -z "$HPP_PATH" ] || [ -z "$CPP_PATH" ]; then
+          echo "ERR: Impossibile trovare i file VoodooI2CHIDDevice.hpp o .cpp!"
+          echo "Ecco i file presenti nel progetto:"
+          find . -maxdepth 3 -not -path '*/.*'
+          exit 1
+        fi
+
+        echo ">>> File trovati in:"
+        echo "HPP: $HPP_PATH"
+        echo "CPP: $CPP_PATH"
+
         # Inserisce la dicitura di didTerminate prima della chiusura della classe in VoodooI2CHIDDevice.hpp
         sed -i '' '/bool open(IOService \*forClient/i \
             bool didTerminate(IOService* provider, IOOptionBits options, bool* defer) override; \
-        ' VoodooI2CHIDDevice.hpp
+        ' "$HPP_PATH"
 
         # Inserisce l'implementazione della funzione didTerminate in VoodooI2CHIDDevice.cpp
-        cat << 'EOF' >> VoodooI2CHIDDevice.cpp
+        cat << 'EOF' >> "$CPP_PATH"
 
         bool VoodooI2CHIDDevice::didTerminate(IOService* provider, IOOptionBits options, bool* defer) {
             return IOService::didTerminate(provider, options, defer);
         }
         EOF
 
-        echo ">>> Patch applicata con successo ai sorgenti di VoodooI2CHID!"
+        echo ">>> Patch applicata con successo!"
 
     - name: Compilazione del Kext
       run: |
-        # Cerca il file .xcodeproj o .xcworkspace presente nel tuo specifico repository e lo compila
-        if [ -d *.xcworkspace ]; then
-          xcodebuild -workspace *.xcworkspace -scheme "VoodooI2CHID" -configuration Release -derivedDataPath build/ ARCHS=x86_64 ONLY_ACTIVE_ARCH=NO RUN_CLANG_STATIC_ANALYZER=NO
+        # Individua il file di progetto Xcode
+        XCODE_PROJ=$(find . -name "*.xcodeproj" -print -quit)
+        XCODE_WORK=$(find . -name "*.xcworkspace" -print -quit)
+
+        if [ -n "$XCODE_WORK" ]; then
+          echo ">>> Compilazione tramite Workspace: $XCODE_WORK"
+          xcodebuild -workspace "$XCODE_WORK" -scheme "VoodooI2CHID" -configuration Release -derivedDataPath build/ ARCHS=x86_64 ONLY_ACTIVE_ARCH=NO RUN_CLANG_STATIC_ANALYZER=NO
+        elif [ -n "$XCODE_PROJ" ]; then
+          echo ">>> Compilazione tramite Progetto: $XCODE_PROJ"
+          xcodebuild -project "$XCODE_PROJ" -scheme "VoodooI2CHID" -configuration Release -derivedDataPath build/ ARCHS=x86_64 ONLY_ACTIVE_ARCH=NO RUN_CLANG_STATIC_ANALYZER=NO
         else
-          xcodebuild -project *.xcodeproj -scheme "VoodooI2CHID" -configuration Release -derivedDataPath build/ ARCHS=x86_64 ONLY_ACTIVE_ARCH=NO RUN_CLANG_STATIC_ANALYZER=NO
+          echo "ERR: Nessun file .xcodeproj o .xcworkspace trovato nel repository!"
+          exit 1
         fi
 
     - name: Archiviazione e Caricamento del Kext Pronto
