@@ -11,68 +11,49 @@ jobs:
       ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: true
 
     steps:
-    - name: Checkout del codice sorgente
+    - name: Checkout del codice sorgente (Tuo Fork)
       uses: actions/checkout@v4
       with:
-        submodules: 'recursive'
-        fetch-depth: 1
+        path: 'mio_satellite'
+
+    - name: Scarica il Framework Principale VoodooI2C
+      run: |
+        git clone --depth=1 --recurse-submodules https://github.com voodoo_main
 
     - name: Configura Xcode
       run: |
         sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
         xcodebuild -version
 
-    - name: Applicazione della correzione (Fix didTerminate)
+    - name: Innesto Codice Modificato e Patch
       run: |
-        echo ">>> Ricerca dei file sorgente nel repository..."
-        HPP_PATH=$(find . -name "VoodooI2CHIDDevice.hpp" -print -quit)
-        CPP_PATH=$(find . -name "VoodooI2CHIDDevice.cpp" -print -quit)
-
-        if [ -z "$HPP_PATH" ] || [ -z "$CPP_PATH" ]; then
-          echo "ERR: Impossibile trovare i file VoodooI2CHIDDevice.hpp o .cpp!"
-          echo "Ecco i file presenti nel progetto:"
-          find . -maxdepth 3 -not -path '*/.*'
-          exit 1
-        fi
-
-        echo ">>> File trovati in:"
-        echo "HPP: $HPP_PATH"
-        echo "CPP: $CPP_PATH"
-
-        # Inserisce la dicitura di didTerminate prima della chiusura della classe in VoodooI2CHIDDevice.hpp
+        # Sostituisce il satellite originale di VoodooI2C con i tuoi file specifici per XPS 9560
+        rm -rf voodoo_main/Satellites/VoodooI2CHID
+        cp -R mio_satellite voodoo_main/Satellites/VoodooI2CHID
+        
+        cd voodoo_main/Satellites/VoodooI2CHID
+        
+        # Applica la patch didTerminate di sicurezza per evitare il panic allo spegnimento
         sed -i '' '/bool open(IOService \*forClient/i \
             bool didTerminate(IOService* provider, IOOptionBits options, bool* defer) override; \
-        ' "$HPP_PATH"
+        ' VoodooI2CHIDDevice.hpp
 
-        # Inserisce l'implementazione della funzione didTerminate in VoodooI2CHIDDevice.cpp
-        cat << 'EOF' >> "$CPP_PATH"
+        cat << 'EOF' >> VoodooI2CHIDDevice.cpp
 
         bool VoodooI2CHIDDevice::didTerminate(IOService* provider, IOOptionBits options, bool* defer) {
             return IOService::didTerminate(provider, options, defer);
         }
         EOF
+        echo ">>> File innestati e patchati con successo nel workspace principale!"
 
-        echo ">>> Patch applicata con successo!"
-
-    - name: Compilazione del Kext
+    - name: Compilazione Totale del Workspace
       run: |
-        # Individua il file di progetto Xcode
-        XCODE_PROJ=$(find . -name "*.xcodeproj" -print -quit)
-        XCODE_WORK=$(find . -name "*.xcworkspace" -print -quit)
+        cd voodoo_main
+        # Compila l'intero workspace includendo tutte le dipendenze e i driver necessari
+        xcodebuild -workspace VoodooI2C.xcworkspace -scheme "VoodooI2C" -configuration Release -derivedDataPath build/ ARCHS=x86_64 ONLY_ACTIVE_ARCH=NO RUN_CLANG_STATIC_ANALYZER=NO
 
-        if [ -n "$XCODE_WORK" ]; then
-          echo ">>> Compilazione tramite Workspace: $XCODE_WORK"
-          xcodebuild -workspace "$XCODE_WORK" -scheme "VoodooI2CHID" -configuration Release -derivedDataPath build/ ARCHS=x86_64 ONLY_ACTIVE_ARCH=NO RUN_CLANG_STATIC_ANALYZER=NO
-        elif [ -n "$XCODE_PROJ" ]; then
-          echo ">>> Compilazione tramite Progetto: $XCODE_PROJ"
-          xcodebuild -project "$XCODE_PROJ" -scheme "VoodooI2CHID" -configuration Release -derivedDataPath build/ ARCHS=x86_64 ONLY_ACTIVE_ARCH=NO RUN_CLANG_STATIC_ANALYZER=NO
-        else
-          echo "ERR: Nessun file .xcodeproj o .xcworkspace trovato nel repository!"
-          exit 1
-        fi
-
-    - name: Archiviazione e Caricamento del Kext Pronto
+    - name: Archiviazione e Caricamento dei Kext Pronti
       uses: actions/upload-artifact@v4
       with:
-        name: VoodooI2CHID-XPS9560-Fix
-        path: build/Build/Products/Release/*.kext
+        name: VoodooI2C-XPS9560-Tutti-i-Kext
+        path: voodoo_main/build/Build/Products/Release/*.kext
