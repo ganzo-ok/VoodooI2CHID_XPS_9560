@@ -10,7 +10,7 @@ jobs:
 
     steps:
     - name: Checkout del codice sorgente
-      uses: actions/checkout:v4
+      uses: actions/checkout@v4
       with:
         submodules: 'recursive'
         fetch-depth: 1
@@ -25,7 +25,7 @@ jobs:
         cd Satellites/VoodooI2CHID
         
         # Sostituzione mirata della patch descritta nel tuo script all'interno di VoodooI2CHIDDevice.hpp
-        # Inserisce la dichiarazione di didTerminate prima della chiusura della classe
+        # Inserisce la dicitura di didTerminate prima della chiusura della classe
         sed -i '' '/bool open(IOService \*forClient/i \
             bool didTerminate(IOService* provider, IOOptionBits options, bool* defer) override; \
         ' VoodooI2CHIDDevice.hpp
@@ -46,7 +46,7 @@ jobs:
         xcodebuild -workspace VoodooI2C.xcworkspace -scheme VoodooI2C -configuration Release RUN_CLANG_STATIC_ANALYZER=NO ONLY_ACTIVE_ARCH=NO
 
     - name: Archiviazione e Caricamento dei Kext Pronti
-      uses: actions/artifacts@v4
+      uses: actions/upload-artifact@v4
       with:
         name: VoodooI2C-Modificato-Kexts
         path: build/Release/*.kext
