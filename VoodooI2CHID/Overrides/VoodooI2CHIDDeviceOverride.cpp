@@ -38,3 +38,6 @@ IOReturn VoodooI2CHIDDeviceOverride::newReportDescriptor(IOMemoryDescriptor** de
 
     return kIOReturnSuccess;
 }
+
+// REMOVED: willTerminate and didTerminate implementations.
+// They incorrectly returned true, bypassing IOService::didTerminate which schedules stop().

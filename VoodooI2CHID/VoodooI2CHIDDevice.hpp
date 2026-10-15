@@ -182,6 +182,12 @@ class EXPORT VoodooI2CHIDDevice : public IOHIDDevice {
 
     void stop(IOService* provider) override;
 
+    /**
+     * Works around a NULL dereference in IOHIDDevice::didTerminate on macOS 26 (shutdown panic).
+     * Calls IOService::didTerminate directly, skipping the buggy IOHIDDevice layer.
+     */
+    bool didTerminate(IOService* provider, IOOptionBits options, bool* defer) override;
+
     /* Create and return a new memory descriptor that describes the report descriptor for the HID device
      * @descriptor Pointer to the memory descriptor returned. This memory descriptor will be released by the caller.
      *

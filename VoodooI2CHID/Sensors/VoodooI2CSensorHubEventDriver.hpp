@@ -36,6 +36,9 @@ class EXPORT VoodooI2CSensorHubEventDriver : public IOHIDEventService {
     
     bool willTerminate(IOService* provider, IOOptionBits options) override;
 
+    // REMOVED: didTerminate declaration. 
+    // This class inherits from IOHIDEventService. The stub returning true blocked termination.
+
  protected:
  private:
     IOHIDInterface* hid_interface;

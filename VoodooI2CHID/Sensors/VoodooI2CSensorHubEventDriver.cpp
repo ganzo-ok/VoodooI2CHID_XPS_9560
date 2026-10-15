@@ -120,6 +120,9 @@ bool VoodooI2CSensorHubEventDriver::willTerminate(IOService* provider, IOOptionB
     return super::willTerminate(provider, options);
 }
 
+// REMOVED: didTerminate implementation.
+// Returning true here prevented IOService::didTerminate from running, blocking stop()/PMstop().
+
 IOReturn VoodooI2CSensorHubEventDriver::parseSensorParent(IOHIDElement* parent) {
     OSArray* children = parent->getChildElements();
 
@@ -151,4 +154,3 @@ IOReturn VoodooI2CSensorHubEventDriver::setPowerState(unsigned long whichState, 
 IOReturn VoodooI2CSensorHubEventDriver::setReport(IOMemoryDescriptor* report, IOHIDReportType reportType, UInt32 reportID) {
     return hid_interface->setReport(report, reportType, reportID);
 }
-

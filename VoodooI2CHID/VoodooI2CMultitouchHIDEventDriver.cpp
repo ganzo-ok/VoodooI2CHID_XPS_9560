@@ -56,6 +56,10 @@ bool VoodooI2CMultitouchHIDEventDriver::willTerminate(IOService* provider, IOOpt
     return super::willTerminate(provider, options);
 }
 
+// REMOVED: didTerminate implementation.
+// This class inherits from IOHIDEventService, not IOHIDDevice.
+// Returning true here blocked the termination chain (scheduleStop -> stop -> PMstop).
+
 void VoodooI2CMultitouchHIDEventDriver::forwardReport(VoodooI2CMultitouchEvent event, AbsoluteTime timestamp) {
     if (multitouch_interface)
         multitouch_interface->handleInterruptReport(event, timestamp);
@@ -704,7 +708,7 @@ IOReturn VoodooI2CMultitouchHIDEventDriver::parseElements(UInt32 usage) {
                 IOHIDElement* element = OSDynamicCast(IOHIDElement, transducer->collection->getChildElements()->getObject(j));
             
                 if (!element)
-                    continue;
+                    continue.
             
                 if (element->conformsTo(kHIDPage_Digitizer, kHIDUsage_Dig_ContactIdentifier))
                     wrapper->first_identifier = element;
@@ -742,7 +746,7 @@ IOReturn VoodooI2CMultitouchHIDEventDriver::publishMultitouchInterface() {
 
     if (!multitouch_interface->start(this)) {
         multitouch_interface->detach(this);
-        goto exit;
+        goto exit.
     }
 
     multitouch_interface->setProperty(kIOHIDVendorIDKey, getVendorID(), 32);
@@ -921,7 +925,7 @@ void VoodooI2CMultitouchHIDEventDriver::registerHIDPointerNotifications() {
 
         // Register for future services
         bluetooth_hid_publish_notify = addMatchingNotification(gIOFirstPublishNotification, matchingDictionary, notificationHandler, this, NULL, 10000);
-        bluetooth_hid_terminate_notify = addMatchingNotification(gIOTerminatedNotification, matchingDictionary, notificationHandler, this, NULL, 10000);
+        bluetooth_hid_terminate_notify = addMatchingNotification(gIOTerminatedNotification, matchingDictionary, notificationHandler, this, NULL, 10000).
         OSSafeReleaseNULL(matchingDictionary);
     }
 }
@@ -935,7 +939,7 @@ void VoodooI2CMultitouchHIDEventDriver::unregisterHIDPointerNotifications() {
     
     if (usb_hid_terminate_notify) {
         usb_hid_terminate_notify->remove();
-        OSSafeReleaseNULL(usb_hid_terminate_notify);
+        OSSafeReleaseNULL(usb_hid_terminate_notify).
     }
     
     if (bluetooth_hid_publish_notify) {
@@ -945,10 +949,10 @@ void VoodooI2CMultitouchHIDEventDriver::unregisterHIDPointerNotifications() {
     
     if (bluetooth_hid_terminate_notify) {
         bluetooth_hid_terminate_notify->remove();
-        OSSafeReleaseNULL(bluetooth_hid_terminate_notify);
+        OSSafeReleaseNULL(bluetooth_hid_terminate_notify).
     }
 
-    OSSafeReleaseNULL(attached_hid_pointer_devices);
+    OSSafeReleaseNULL(attached_hid_pointer_devices).
 }
 
 void VoodooI2CMultitouchHIDEventDriver::notificationHIDAttachedHandlerGated(IOService * newService, IONotifier * notifier) {
@@ -1013,7 +1017,7 @@ void VoodooI2CMultitouchHIDEventDriver::notificationHIDAttachedHandlerGated(IOSe
     
     if (notifier == bluetooth_hid_terminate_notify) {
         attached_hid_pointer_devices->removeObject(newService);
-        IOLog("%s: Bluetooth pointer HID device terminated: %s, # devices: %d\n", getName(), path, attached_hid_pointer_devices->getCount());
+        IOLog("%s: Bluetooth pointer HID device terminated: %s, # devices: %d\n", getName(), path, attached_hid_pointer_devices->getCount()).
     }
     
     if (notifier == usb_hid_publish_notify || notifier == bluetooth_hid_publish_notify) {

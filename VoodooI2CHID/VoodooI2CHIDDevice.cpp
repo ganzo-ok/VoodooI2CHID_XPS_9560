@@ -8,6 +8,8 @@
 
 #include <IOKit/hid/IOHIDDevice.h>
 #include <kern/locks.h>
+#include <kern/clock.h>
+#include <IOKit/IOTypes.h>
 #include "VoodooI2CHIDDevice.hpp"
 #include "../../../VoodooI2C/VoodooI2C/VoodooI2CDevice/VoodooI2CDeviceNub.hpp"
 
@@ -317,6 +319,8 @@ IOReturn VoodooI2CHIDDevice::resetHIDDeviceGated() {
 }
 
 IOReturn VoodooI2CHIDDevice::setHIDPowerState(VoodooI2CState state) {
+    if (!api)
+        return kIOReturnNotReady;
     VoodooI2CHIDDeviceCommand command;
     IOReturn ret = kIOReturnSuccess;
     int attempts = 5;
@@ -514,20 +518,33 @@ bool VoodooI2CHIDDevice::start(IOService* provider) {
 }
 
 void VoodooI2CHIDDevice::stop(IOService* provider) {
+    // Wait for clients to close, but never forever: an unbounded wait here can hang shutdown.
     IOLockLock(client_lock);
-    for(;;) {
-        if (!clients->getCount()) {
+    AbsoluteTime deadline;
+    clock_interval_to_deadline(150, kMillisecondScale, &deadline);
+    while (clients && clients->getCount()) {
+        if (IOLockSleepDeadline(client_lock, &client_lock, deadline, THREAD_UNINT) != THREAD_AWAKENED) {
+            IOLog("%s::%s Timed out waiting for clients to close\n", getName(), name);
             break;
         }
-
-        IOLockSleep(client_lock, &client_lock, THREAD_UNINT);
     }
     IOLockUnlock(client_lock);
 
-    releaseResources();
-    OSSafeReleaseNULL(clients);
+    // Leave the power tree while api is still valid, so setPowerState(0) can talk to the device.
     PMstop();
+    releaseResources();
+
+    IOLockLock(client_lock);
+    OSSafeReleaseNULL(clients);
+    IOLockUnlock(client_lock);
+
     super::stop(provider);
+}
+
+// macOS 26 (Tahoe): IOHIDDevice::didTerminate dereferences a NULL member (fault address 0x48) during
+// shutdown. Skip that layer but keep the base IOService behaviour.
+bool VoodooI2CHIDDevice::didTerminate(IOService* provider, IOOptionBits options, bool* defer) {
+    return IOService::didTerminate(provider, options, defer);
 }
 
 IOReturn VoodooI2CHIDDevice::newReportDescriptor(IOMemoryDescriptor** descriptor) const {
@@ -609,26 +626,41 @@ void VoodooI2CHIDDevice::simulateInterrupt(OSObject* owner, IOTimerEventSource* 
 }
 
 bool VoodooI2CHIDDevice::open(IOService *forClient, IOOptionBits options, void *arg) {
-    IOLockLock(client_lock);
-    clients->setObject(forClient);
-    IOUnlock(client_lock);
+    bool success = super::open(forClient, options, arg);
+    if (success) {
+        IOLockLock(client_lock);
+        if (clients) {
+            bool exists = false;
+            for (int i = 0; i < clients->getCount(); i++) {
+                if (clients->getObject(i) == forClient) {
+                    exists = true;
+                    break;
+                }
+            }
+            if (!exists) {
+                clients->setObject(forClient);
+            }
+        }
+        IOLockUnlock(client_lock);
+    }
 
-    return super::open(forClient, options, arg);
+    return success;
 }
 
 void VoodooI2CHIDDevice::close(IOService *forClient, IOOptionBits options) {
     IOLockLock(client_lock);
 
-    for(int i = 0; i < clients->getCount(); i++) {
-        OSObject* service = clients->getObject(i);
+    if (clients) {
+        for (int i = clients->getCount() - 1; i >= 0; i--) {
+            OSObject* service = clients->getObject(i);
 
-        if (service == forClient) {
-            clients->removeObject(i);
-            break;
+            if (service == forClient) {
+                clients->removeObject(i);
+            }
         }
     }
 
-    IOUnlock(client_lock);
+    IOLockUnlock(client_lock);
 
     IOLockWakeup(client_lock, &client_lock, true);
 
@@ -661,3 +693,5 @@ void VoodooI2CHIDDevice::stopInterrupt() {
     }
     is_interrupt_started = false;
 }
+
+// REMOVED: willTerminate implementation (was calling IOService::willTerminate, not needed for the panic fix)
