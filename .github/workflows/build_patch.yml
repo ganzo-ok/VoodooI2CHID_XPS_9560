@@ -18,8 +18,7 @@ jobs:
 
     - name: Scarica il Framework Principale VoodooI2C
       run: |
-        # Clonazione corretta con URL completo della repository ufficiale
-        git clone --depth=1 --recurse-submodules https://github.com voodoo_main
+        git clone --depth=1 --recurse-submodules "https://github.com" voodoo_main
 
     - name: Configura Xcode
       run: |
@@ -28,13 +27,11 @@ jobs:
 
     - name: Innesto Codice Modificato e Patch
       run: |
-        # Sostituisce il satellite originale di VoodooI2C con i tuoi file specifici per XPS 9560
         rm -rf voodoo_main/Satellites/VoodooI2CHID
         cp -R mio_satellite voodoo_main/Satellites/VoodooI2CHID
         
         cd voodoo_main/Satellites/VoodooI2CHID
         
-        # Applica la patch didTerminate di sicurezza per evitare il panic allo spegnimento
         sed -i '' '/bool open(IOService \*forClient/i \
             bool didTerminate(IOService* provider, IOOptionBits options, bool* defer) override; \
         ' VoodooI2CHIDDevice.hpp
@@ -45,12 +42,11 @@ jobs:
             return IOService::didTerminate(provider, options, defer);
         }
         EOF
-        echo ">>> File innestati e patchati con successo nel workspace principale!"
+        echo ">>> File innestati e patchati con successo!"
 
     - name: Compilazione Totale del Workspace
       run: |
         cd voodoo_main
-        # Compila l'intero workspace includendo tutte le dipendenze e i driver necessari
         xcodebuild -workspace VoodooI2C.xcworkspace -scheme "VoodooI2C" -configuration Release -derivedDataPath build/ ARCHS=x86_64 ONLY_ACTIVE_ARCH=NO RUN_CLANG_STATIC_ANALYZER=NO
 
     - name: Archiviazione e Caricamento dei Kext Pronti
