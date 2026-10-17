@@ -541,11 +541,15 @@ void VoodooI2CHIDDevice::stop(IOService* provider) {
     super::stop(provider);
 }
 
+
 // macOS 26 (Tahoe): IOHIDDevice::didTerminate dereferences a NULL member (fault address 0x48) during
 // shutdown. Skip that layer but keep the base IOService behaviour.
+
 bool VoodooI2CHIDDevice::didTerminate(IOService* provider, IOOptionBits options, bool* defer) {
     return IOService::didTerminate(provider, options, defer);
 }
+
+
 
 IOReturn VoodooI2CHIDDevice::newReportDescriptor(IOMemoryDescriptor** descriptor) const {
     if (!hid_descriptor.wReportDescLength) {

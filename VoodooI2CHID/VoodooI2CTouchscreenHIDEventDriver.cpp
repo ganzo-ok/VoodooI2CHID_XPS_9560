@@ -242,8 +242,10 @@ void VoodooI2CTouchscreenHIDEventDriver::forwardReport(VoodooI2CMultitouchEvent 
 
     if (active_framebuffer) {
         OSNumber* number = OSDynamicCast(OSNumber, active_framebuffer->getProperty(kIOFBTransformKey));
-        current_rotation = number->unsigned8BitValue() / 0x10;
-        multitouch_interface->setProperty(kIOFBTransformKey, current_rotation, 8);
+        if (number)
+            current_rotation = number->unsigned8BitValue() / 0x10;
+        if (multitouch_interface)   // REV 9: the interface may not exist (USB touchscreen)
+            multitouch_interface->setProperty(kIOFBTransformKey, current_rotation, 8);
     }
     
     if (event.contact_count) {
@@ -264,11 +266,12 @@ void VoodooI2CTouchscreenHIDEventDriver::forwardReport(VoodooI2CMultitouchEvent 
                 scheduleScrollEnd();
             }
 
-            multitouch_interface->handleInterruptReport(event, timestamp);
+            if (multitouch_interface)   // REV 9
+                multitouch_interface->handleInterruptReport(event, timestamp);
         } else {
             // Process single touch data
             if (!checkStylus(timestamp, event)) {
-                if (!checkFingerTouch(timestamp, event))
+                if (!checkFingerTouch(timestamp, event) && multitouch_interface)   // REV 9
                     multitouch_interface->handleInterruptReport(event, timestamp);
             }
         }
@@ -318,11 +321,19 @@ bool VoodooI2CTouchscreenHIDEventDriver::handleStart(IOService* provider) {
 }
 
 void VoodooI2CTouchscreenHIDEventDriver::handleStop(IOService* provider) {
-    if (timer_source) {
-        work_loop->removeEventSource(timer_source);
-        OSSafeReleaseNULL(timer_source);
+    // REV 9: remove ALL three timers. Before, only timer_source was removed: drag_timer_source and
+    // scroll_timer_source stayed on the (Apple USB HID device's) work loop pointing at a freed driver.
+    IOTimerEventSource** timers[] = { &timer_source, &drag_timer_source, &scroll_timer_source };
+    for (IOTimerEventSource** t : timers) {
+        if (*t) {
+            (*t)->cancelTimeout();
+            (*t)->disable();
+            if (work_loop)
+                work_loop->removeEventSource(*t);
+            OSSafeReleaseNULL(*t);
+        }
     }
-    
+
     OSSafeReleaseNULL(work_loop);
     
     if (active_framebuffer) {

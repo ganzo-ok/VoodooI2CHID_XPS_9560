@@ -18,31 +18,19 @@ jobs:
 
     - name: Scarica il Framework Principale VoodooI2C
       run: |
-        git clone --depth=1 --recurse-submodules "https://github.com" voodoo_main
+        git clone --depth=1 --branch 2.9.1 --recurse-submodules "https://github.com/VoodooI2C/VoodooI2C.git" voodoo_main
 
     - name: Configura Xcode
       run: |
         sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
         xcodebuild -version
 
-    - name: Innesto Codice Modificato e Patch
+    - name: Innesto Codice Modificato
       run: |
+        # Le correzioni (didTerminate, Rev 9) sono gia' nei sorgenti del fork: nessuna patch al volo.
         rm -rf voodoo_main/Satellites/VoodooI2CHID
         cp -R mio_satellite voodoo_main/Satellites/VoodooI2CHID
-        
-        cd voodoo_main/Satellites/VoodooI2CHID
-        
-        sed -i '' '/bool open(IOService \*forClient/i \
-            bool didTerminate(IOService* provider, IOOptionBits options, bool* defer) override; \
-        ' VoodooI2CHIDDevice.hpp
-
-        cat << 'EOF' >> VoodooI2CHIDDevice.cpp
-
-        bool VoodooI2CHIDDevice::didTerminate(IOService* provider, IOOptionBits options, bool* defer) {
-            return IOService::didTerminate(provider, options, defer);
-        }
-        EOF
-        echo ">>> File innestati e patchati con successo!"
+        echo ">>> Sorgenti Rev 9 innestati"
 
     - name: Compilazione Totale del Workspace
       run: |
