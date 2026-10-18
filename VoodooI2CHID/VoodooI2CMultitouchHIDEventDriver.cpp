@@ -12,6 +12,8 @@
 #include <IOKit/usb/USBSpec.h>
 #include <IOKit/bluetooth/BluetoothAssignedNumbers.h>
 #include <IOKit/IOLib.h>
+#include <IOKit/IOMessage.h>
+#include <IOKit/pwr_mgt/RootDomain.h>
 
 #define GetReportType(type)                                             \
 ((type <= kIOHIDElementTypeInput_ScanCodes) ? kIOHIDReportTypeInput :   \
@@ -19,6 +21,9 @@
 (type <= kIOHIDElementTypeFeature) ? kIOHIDReportTypeFeature : -1)
 
 #define super IOHIDEventService
+
+// REV 13 diagnostics: trace every step of the termination path, to find where shutdown hangs.
+#define R13(fmt, ...) IOLog("R13 %s %p " fmt "\n", getMetaClass()->getClassName(), (void *)this, ##__VA_ARGS__)
 OSDefineMetaClassAndStructors(VoodooI2CMultitouchHIDEventDriver, IOHIDEventService);
 
 AbsoluteTime last_multi_touch_event = 0;
@@ -49,11 +54,35 @@ void VoodooI2CMultitouchHIDEventDriver::calibrateJustifiedPreferredStateElement(
 }
 
 bool VoodooI2CMultitouchHIDEventDriver::willTerminate(IOService* provider, IOOptionBits options) {
-    if (hid_interface)
+    R13("willTerminate begin provider=%s mt_interface=%p", provider ? provider->getName() : "?", (void *)multitouch_interface);
+    if (hid_interface) {
+        R13("closing hid_interface %p", (void *)hid_interface);
         hid_interface->close(this);
+        R13("hid_interface closed");
+    }
     hid_interface = NULL;
     
-    return super::willTerminate(provider, options);
+    bool ret = super::willTerminate(provider, options);
+    R13("willTerminate end");
+    return ret;
+}
+
+bool VoodooI2CMultitouchHIDEventDriver::didTerminate(IOService* provider, IOOptionBits options, bool* defer) {
+    R13("didTerminate begin");
+    bool ret = super::didTerminate(provider, options, defer);
+    R13("didTerminate end defer=%d", defer ? *defer : -1);
+    return ret;
+}
+
+void VoodooI2CMultitouchHIDEventDriver::stop(IOService* provider) {
+    R13("stop begin");
+    super::stop(provider);
+    R13("stop end");
+}
+
+void VoodooI2CMultitouchHIDEventDriver::free() {
+    R13("free");
+    super::free();
 }
 
 // REMOVED: didTerminate implementation.
@@ -435,16 +464,27 @@ bool VoodooI2CMultitouchHIDEventDriver::handleStart(IOService* provider) {
 
     OSSafeReleaseNULL(object);
     
-    // REV 9 TEST: on a USB provider (the touchscreen, driven by Apple's DriverKit AppleUserUSBHostHIDDevice)
-    // do NOT build the VoodooI2CMultitouchInterface -> VoodooInput subtree. At shutdown DriverKit terminates the
-    // USB device and the whole subtree under it; VoodooInput's IOHIDDevice children are then hit by
-    // IOHIDDevice::didTerminate after being freed (panic CR2=0x48). Single touch, tap, drag and long-press
-    // right click do not need the interface; two-finger scroll and gestures do.
-    bool is_usb_transport = (strncmp(transport->getCStringNoCopy(), kIOHIDTransportUSBValue, sizeof(kIOHIDTransportUSBValue)) == 0);
-    if (should_have_interface && !is_usb_transport)
+    // REV 10: the multitouch interface is published again on USB too (two-finger scroll and gestures).
+    // The REV 9 shutdown panic is fixed in VoodooInput::stop (REV 10), which no longer stops/detaches
+    // children that IOKit is already terminating.
+    if (should_have_interface)
         publishMultitouchInterface();
-    IOLog("%s::%s REV 9: transport=%s, multitouch interface %s\n", getName(), name ? name : "?",
+    IOLog("%s::%s REV 16: transport=%s, multitouch interface %s\n", getName(), name ? name : "?",
           transport->getCStringNoCopy(), multitouch_interface ? "created" : "NOT created");
+
+    // REV 15: on USB (touchscreen driven by Apple's DriverKit AppleUserUSBHostHIDDevice) tear the multitouch
+    // interface / VoodooInput subtree down ourselves as soon as shutdown or restart is announced, while the system
+    // is still fully up. Otherwise DriverKit terminates the USB device and that whole subtree at the very end of
+    // shutdown, racing with its own teardown -> panic in IOHIDDevice::didTerminate (CR2=0x48) or a hang.
+    if (multitouch_interface &&
+        strncmp(transport->getCStringNoCopy(), kIOHIDTransportUSBValue, sizeof(kIOHIDTransportUSBValue)) == 0) {
+        IOPMrootDomain* root_domain = getPMRootDomain();
+        if (root_domain)
+            shutdown_notifier = root_domain->registerInterest(gIOPriorityPowerStateInterest,
+                                                              &VoodooI2CMultitouchHIDEventDriver::shutdownHandler, this, nullptr);
+        IOLog("%s::%s REV 15: shutdown notifier %s\n", getName(), name ? name : "?",
+              shutdown_notifier ? "registered" : "NOT registered");
+    }
     
     digitiser.fingers = OSArray::withCapacity(1);
     
@@ -483,13 +523,49 @@ bool VoodooI2CMultitouchHIDEventDriver::handleStart(IOService* provider) {
     return true;
 }
 
+IOReturn VoodooI2CMultitouchHIDEventDriver::shutdownHandler(void* target, void* refCon, UInt32 messageType,
+                                                            IOService* provider, void* messageArgument, vm_size_t argSize) {
+    VoodooI2CMultitouchHIDEventDriver* self = OSDynamicCast(VoodooI2CMultitouchHIDEventDriver, (OSObject *)target);
+    if (self && (messageType == kIOMessageSystemPagingOff ||
+                 messageType == kIOMessageSystemWillPowerOff ||
+                 messageType == kIOMessageSystemWillRestart))
+        self->teardownMultitouchInterfaceForShutdown(messageType);
+    return kIOReturnSuccess;
+}
+
+void VoodooI2CMultitouchHIDEventDriver::teardownMultitouchInterfaceForShutdown(UInt32 messageType) {
+    VoodooI2CMultitouchInterface* interface = multitouch_interface;
+    if (!interface || interface->isInactive())
+        return;
+
+    // REV 16: do NOT terminate the subtree. On macOS 26 terminating VoodooInputSimulatorDevice /
+    // VoodooInputActuatorDevice panics in IOHIDDevice::didTerminate (use-after-free) whoever starts the termination
+    // (REV 15 did it early, at PagingOff, and still panicked). The I2C touchpad has the very same subtree and never
+    // panics because nobody terminates it at shutdown. So just detach the subtree from this driver and leave it alive
+    // and orphaned, exactly like the I2C one, until the machine powers off. Our reference from
+    // publishMultitouchInterface() is deliberately kept, so the subtree is never freed. When DriverKit later
+    // terminates the USB touchscreen it finds this driver without children (same as REV 9).
+    IOLog("%s::%s REV 16: shutdown (msg 0x%x), detaching multitouch interface (no terminate)\n", getName(),
+          name ? name : "?", messageType);
+    multitouch_interface = nullptr;     // stop forwarding reports
+    interface->detach(this);
+    IOLog("%s::%s REV 16: multitouch interface detached, provider now %p\n", getName(), name ? name : "?",
+          (void *)interface->getProvider());
+}
+
 void VoodooI2CMultitouchHIDEventDriver::handleStop(IOService* provider) {
+    R13("handleStop begin");
+    if (shutdown_notifier) {
+        shutdown_notifier->remove();
+        shutdown_notifier = nullptr;
+    }
     unregisterHIDPointerNotifications();
     OSSafeReleaseNULL(attached_hid_pointer_devices);
     
     if (multitouch_interface) {
         // REV 9: if we are being terminated, IOKit is already terminating our child subtree and will
         // stop/detach it itself. Doing it by hand here as well tears the subtree down twice.
+        R13("multitouch_interface %p inactive=%d", (void *)multitouch_interface, multitouch_interface->isInactive() ? 1 : 0);
         if (!multitouch_interface->isInactive()) {
             multitouch_interface->stop(this);
             multitouch_interface->detach(this);
@@ -510,8 +586,10 @@ void VoodooI2CMultitouchHIDEventDriver::handleStop(IOService* provider) {
     OSSafeReleaseNULL(digitiser.styluses);
     OSSafeReleaseNULL(digitiser.fingers);
 
+    R13("handleStop PMstop");
     PMstop();
     super::handleStop(provider);
+    R13("handleStop end");
 }
 
 UInt32 VoodooI2CMultitouchHIDEventDriver::parseElementPhysicalMax(IOHIDElement* element) {

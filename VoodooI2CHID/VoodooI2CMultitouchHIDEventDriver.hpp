@@ -101,6 +101,10 @@ class EXPORT VoodooI2CMultitouchHIDEventDriver : public IOHIDEventService {
      */
 
     bool willTerminate(IOService* provider, IOOptionBits options) override;
+    // REV 13 diagnostics (shutdown hang)
+    bool didTerminate(IOService* provider, IOOptionBits options, bool* defer) override;
+    void stop(IOService* provider) override;
+    void free() override;
 
     /*Gets the latest value of an element by issuing a getReport request to the
      * device. Necessary due to changes between 10.11 and 10.12.
@@ -286,6 +290,12 @@ class EXPORT VoodooI2CMultitouchHIDEventDriver : public IOHIDEventService {
     
     OSSet* attached_hid_pointer_devices;
     
+    // REV 15: early teardown of the multitouch interface at shutdown/restart (USB transport only)
+    IONotifier* shutdown_notifier {nullptr};
+    static IOReturn shutdownHandler(void* target, void* refCon, UInt32 messageType, IOService* provider,
+                                    void* messageArgument, vm_size_t argSize);
+    void teardownMultitouchInterfaceForShutdown(UInt32 messageType);
+
     IONotifier* usb_hid_publish_notify;     // Notification when an USB mouse HID device is connected
     IONotifier* usb_hid_terminate_notify; // Notification when an USB mouse HID device is disconnected
     

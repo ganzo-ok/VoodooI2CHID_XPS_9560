@@ -321,6 +321,7 @@ bool VoodooI2CTouchscreenHIDEventDriver::handleStart(IOService* provider) {
 }
 
 void VoodooI2CTouchscreenHIDEventDriver::handleStop(IOService* provider) {
+    IOLog("R13 %s %p touchscreen handleStop begin\n", getMetaClass()->getClassName(), (void *)this);
     // REV 9: remove ALL three timers. Before, only timer_source was removed: drag_timer_source and
     // scroll_timer_source stayed on the (Apple USB HID device's) work loop pointing at a freed driver.
     IOTimerEventSource** timers[] = { &timer_source, &drag_timer_source, &scroll_timer_source };
@@ -340,6 +341,7 @@ void VoodooI2CTouchscreenHIDEventDriver::handleStop(IOService* provider) {
         OSSafeReleaseNULL(active_framebuffer);
     }
     
+    IOLog("R13 %s %p touchscreen timers removed\n", getMetaClass()->getClassName(), (void *)this);
     super::handleStop(provider);
 }
 

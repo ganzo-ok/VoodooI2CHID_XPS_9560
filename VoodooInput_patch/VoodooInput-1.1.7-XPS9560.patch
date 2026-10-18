@@ -1,0 +1,157 @@
+diff --git a/VoodooInput/Trackpoint/TrackpointDevice.cpp b/VoodooInput/Trackpoint/TrackpointDevice.cpp
+index 728eaf4..c6cc642 100644
+--- a/VoodooInput/Trackpoint/TrackpointDevice.cpp
++++ b/VoodooInput/Trackpoint/TrackpointDevice.cpp
+@@ -7,6 +7,7 @@
+  */
+ 
+ #include "TrackpointDevice.hpp"
++#include <IOKit/IOLib.h>
+ 
+ OSDefineMetaClassAndStructors(TrackpointDevice, IOHIPointing);
+ 
+@@ -153,6 +154,28 @@ void TrackpointDevice::updateScrollwheel(short deltaAxis1, short deltaAxis2, sho
+     dispatchScrollWheelEvent(deltaAxis1, deltaAxis2, deltaAxis3, timestamp);
+ }
+ 
++// REV 12: IOHIDSystem attaches an IOHIDPointingEventDevice shim (an IOHIDDevice) to every legacy IOHIPointing such
++// as this one, and drops its own reference right away, so only the registry keeps the shim alive. When the whole
++// subtree is terminated at shutdown (touchscreen on USB, terminated by DriverKit) the shim can be freed on another
++// thread before IOKit calls IOHIDDevice::didTerminate on it -> panic in didTerminate+0x1e (_reserved == NULL,
++// CR2=0x48). Hold our own reference on our children from the start of termination until we are freed ourselves,
++// i.e. after IOKit is done with all of them.
+ bool TrackpointDevice::willTerminate(IOService* provider, IOOptionBits options) {
++    if (!terminatingChildren) {
++        terminatingChildren = OSArray::withCapacity(1);
++        OSIterator *it = getChildIterator(gIOServicePlane);
++        if (terminatingChildren && it) {
++            while (OSObject *child = it->getNextObject())
++                terminatingChildren->setObject(child);
++        }
++        OSSafeReleaseNULL(it);
++        IOLog("VoodooInput REV 12: TrackpointDevice retained %u child(ren) for termination\n",
++              terminatingChildren ? terminatingChildren->getCount() : 0);
++    }
+     return  super::willTerminate(provider, options);
+ }
++
++void TrackpointDevice::free() {
++    OSSafeReleaseNULL(terminatingChildren);
++    super::free();
++}
+diff --git a/VoodooInput/Trackpoint/TrackpointDevice.hpp b/VoodooInput/Trackpoint/TrackpointDevice.hpp
+index 649f0a9..985fcd3 100644
+--- a/VoodooInput/Trackpoint/TrackpointDevice.hpp
++++ b/VoodooInput/Trackpoint/TrackpointDevice.hpp
+@@ -36,6 +36,10 @@ private:
+     int btnCount {3};
+     
+     MiddlePressedState middleBtnState {NOT_PRESSED};
++
++    // REV 12: children (the IOHIDPointingEventDevice shim that IOHIDSystem attaches to us) retained while we are
++    // being terminated, released in free().
++    OSArray *terminatingChildren {nullptr};
+     int signum(int value);
+     void getOSIntValue(OSDictionary *dict, int *val, const char *key);
+     void getOSShortValue(OSDictionary *dict, short *val, const char *key);
+@@ -47,6 +51,7 @@ public:
+     bool start(IOService* provider) override;
+     void stop(IOService* provider) override;
+     bool willTerminate(IOService* provider, IOOptionBits options) override;
++    void free() override;
+     
+     virtual UInt32 deviceType() override;
+     virtual UInt32 interfaceID() override;
+diff --git a/VoodooInput/VoodooInput.cpp b/VoodooInput/VoodooInput.cpp
+index 01dc650..6462e3e 100644
+--- a/VoodooInput/VoodooInput.cpp
++++ b/VoodooInput/VoodooInput.cpp
+@@ -31,12 +31,27 @@ bool VoodooInput::start(IOService *provider) {
+         return false;
+     }
+ 
++    // REV 14: no TrackpointDevice when we sit on a USB HID device (the XPS 9560 touchscreen, driven by Apple's
++    // DriverKit AppleUserUSBHostHIDDevice). A touchscreen has no trackpoint, and TrackpointDevice is a legacy
++    // IOHIPointing: IOHIDSystem attaches to it and hangs an IOHIDPointingEventDevice shim under it. When DriverKit
++    // terminates the USB device at shutdown that drags IOHIDSystem into the teardown -> panic in
++    // IOHIDDevice::didTerminate (freed shim) or a hang. Simulator/actuator (gestures) are kept.
++    bool usb_transport = false;
++    OSObject *transportObj = copyProperty("Transport", gIOServicePlane);
++    OSString *transport = OSDynamicCast(OSString, transportObj);
++    if (transport && transport->isEqualTo("USB"))
++        usb_transport = true;
++    IOLog("VoodooInput REV 14: transport=%s, trackpoint %s\n", transport ? transport->getCStringNoCopy() : "none",
++          usb_transport ? "NOT created" : "created");
++    OSSafeReleaseNULL(transportObj);
++
+     // Allocate the simulator and actuator devices
+     simulator = OSTypeAlloc(VoodooInputSimulatorDevice);
+     actuator = OSTypeAlloc(VoodooInputActuatorDevice);
+-    trackpoint = OSTypeAlloc(TrackpointDevice);
++    if (!usb_transport)
++        trackpoint = OSTypeAlloc(TrackpointDevice);
+     
+-    if (!simulator || !actuator || !trackpoint) {
++    if (!simulator || !actuator || (!usb_transport && !trackpoint)) {
+         IOLog("VoodooInput could not alloc simulator, actuator or trackpoint!\n");
+         OSSafeReleaseNULL(simulator);
+         OSSafeReleaseNULL(actuator);
+@@ -67,7 +82,10 @@ bool VoodooInput::start(IOService *provider) {
+     }
+     
+     // Initialize trackpoint device
+-    if (!trackpoint->init(NULL) || !trackpoint->attach(this)) {
++    if (!trackpoint) {
++        // REV 14: skipped on USB
++    }
++    else if (!trackpoint->init(NULL) || !trackpoint->attach(this)) {
+         IOLog("VoodooInput could not init or attach trackpoint!\n");
+         goto exit;
+     }
+@@ -98,25 +116,37 @@ bool VoodooInput::willTerminate(IOService* provider, IOOptionBits options) {
+     return super::willTerminate(provider, options);
+ }
+ 
++// REV 10: when VoodooInput is stopped as part of a termination (e.g. its provider is a USB HID device that
++// DriverKit terminates at shutdown), IOKit is already terminating the simulator/actuator/trackpoint children and
++// will stop/detach them itself and later call IOHIDDevice::didTerminate on them. Stopping and detaching them by
++// hand here as well drops the last reference and frees them first -> use-after-free panic in didTerminate
++// (CR2=0x48). Only tear down children that are not already being terminated; always drop our own reference.
++static void stopChild(IOService *child, IOService *parent) {
++    if (!child->isInactive()) {
++        child->stop(parent);
++        child->detach(parent);
++    }
++}
++
+ void VoodooInput::stop(IOService *provider) {
++    IOLog("VoodooInput REV 10: stop (simulator %s)\n",
++          simulator ? (simulator->isInactive() ? "inactive" : "active") : "none");
++
+     if (simulator) {
+-        simulator->stop(this);
+-        simulator->detach(this);
++        stopChild(simulator, this);
+         OSSafeReleaseNULL(simulator);
+     }
+-    
++
+     if (actuator) {
+-        actuator->stop(this);
+-        actuator->detach(this);
++        stopChild(actuator, this);
+         OSSafeReleaseNULL(actuator);
+     }
+-    
++
+     if (trackpoint) {
+-        trackpoint->stop(this);
+-        trackpoint->detach(this);
++        stopChild(trackpoint, this);
+         OSSafeReleaseNULL(trackpoint);
+     }
+-    
++
+     super::stop(provider);
+ }
+ 
